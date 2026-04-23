@@ -141,7 +141,7 @@ export default function TodoApp() {
         <div className="flex items-end justify-between">
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-[#0f2e1a]">
-              タスク
+              マイタスク
             </h1>
             <p className="mt-1 text-sm text-[#5b7364]">
               {tasks.length === 0
