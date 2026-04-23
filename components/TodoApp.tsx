@@ -1,43 +1,82 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useMemo, useState } from "react";
+import AddTaskForm from "./AddTaskForm";
+import Filters from "./Filters";
+import ProgressChart from "./ProgressChart";
+import TaskItem from "./TaskItem";
+import {
+  CategoryFilter,
+  PRIORITY_META,
+  PriorityFilter,
+  Task,
+} from "@/lib/types";
 
-type Task = {
-  id: string;
-  text: string;
-  done: boolean;
-};
+const STORAGE_KEY = "todo-tasks-v2";
 
 export default function TodoApp() {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [input, setInput] = useState("");
+  const [hydrated, setHydrated] = useState(false);
   const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [justCompletedIds, setJustCompletedIds] = useState<Set<string>>(
+    new Set()
+  );
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
+  const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>("all");
 
   useEffect(() => {
-    const saved = localStorage.getItem("todo-tasks");
-    if (saved) setTasks(JSON.parse(saved));
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as Task[];
+        setTasks(parsed);
+      } catch {
+        // ignore parse error
+      }
+    }
+    setHydrated(true);
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("todo-tasks", JSON.stringify(tasks));
-  }, [tasks]);
+    if (!hydrated) return;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+  }, [tasks, hydrated]);
 
-  const addTask = () => {
-    const text = input.trim();
-    if (!text) return;
+  const addTask = (t: Omit<Task, "id" | "done" | "createdAt">) => {
     setTasks((prev) => [
-      { id: crypto.randomUUID(), text, done: false },
+      {
+        id: crypto.randomUUID(),
+        done: false,
+        createdAt: new Date().toISOString(),
+        ...t,
+      },
       ...prev,
     ]);
-    setInput("");
-    inputRef.current?.focus();
   };
 
   const toggleTask = (id: string) => {
     setTasks((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t))
+      prev.map((t) =>
+        t.id === id
+          ? {
+              ...t,
+              done: !t.done,
+              completedAt: !t.done ? new Date().toISOString() : undefined,
+            }
+          : t
+      )
     );
+    const target = tasks.find((t) => t.id === id);
+    if (target && !target.done) {
+      setJustCompletedIds((prev) => new Set(prev).add(id));
+      setTimeout(() => {
+        setJustCompletedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      }, 700);
+    }
   };
 
   const removeTask = (id: string) => {
@@ -49,111 +88,124 @@ export default function TodoApp() {
         next.delete(id);
         return next;
       });
-    }, 200);
+    }, 250);
   };
 
+  const clearCompleted = () => {
+    const completed = tasks.filter((t) => t.done).map((t) => t.id);
+    setRemovingIds((prev) => {
+      const next = new Set(prev);
+      completed.forEach((id) => next.add(id));
+      return next;
+    });
+    setTimeout(() => {
+      setTasks((prev) => prev.filter((t) => !t.done));
+      setRemovingIds((prev) => {
+        const next = new Set(prev);
+        completed.forEach((id) => next.delete(id));
+        return next;
+      });
+    }, 250);
+  };
+
+  const filtered = useMemo(() => {
+    return tasks
+      .filter(
+        (t) => categoryFilter === "all" || t.category === categoryFilter
+      )
+      .filter(
+        (t) => priorityFilter === "all" || t.priority === priorityFilter
+      )
+      .sort((a, b) => {
+        if (a.done !== b.done) return a.done ? 1 : -1;
+        const pa = PRIORITY_META[a.priority].order;
+        const pb = PRIORITY_META[b.priority].order;
+        if (pa !== pb) return pa - pb;
+        if (a.dueDate && b.dueDate) {
+          return a.dueDate.localeCompare(b.dueDate);
+        }
+        if (a.dueDate) return -1;
+        if (b.dueDate) return 1;
+        return b.createdAt.localeCompare(a.createdAt);
+      });
+  }, [tasks, categoryFilter, priorityFilter]);
+
   const remaining = tasks.filter((t) => !t.done).length;
+  const hasCompleted = tasks.some((t) => t.done);
+  const filtersActive =
+    categoryFilter !== "all" || priorityFilter !== "all";
 
   return (
-    <div className="w-full max-w-md">
-      <div className="mb-8">
-        <h1 className="text-3xl font-semibold text-[#1a1a2e] tracking-tight">
-          タスク
-        </h1>
-        <p className="mt-1 text-sm text-[#888]">
-          {tasks.length === 0
-            ? "タスクがありません"
-            : remaining === 0
-            ? "すべて完了！"
-            : `残り ${remaining} 件`}
-        </p>
-      </div>
+    <div className="w-full max-w-lg">
+      <header className="mb-6">
+        <div className="flex items-end justify-between">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight text-[#0f2e1a]">
+              タスク
+            </h1>
+            <p className="mt-1 text-sm text-[#5b7364]">
+              {tasks.length === 0
+                ? "今日は何から始めますか？"
+                : remaining === 0
+                ? "すべて完了しました 🎉"
+                : `残り ${remaining} 件`}
+            </p>
+          </div>
+          <div className="text-right">
+            <div className="text-[10px] uppercase tracking-widest text-[#5b7364] font-semibold">
+              Today
+            </div>
+            <div className="text-sm text-[#0f2e1a] font-medium">
+              {new Date().toLocaleDateString("ja-JP", {
+                month: "long",
+                day: "numeric",
+                weekday: "short",
+              })}
+            </div>
+          </div>
+        </div>
+      </header>
 
-      <div className="flex gap-2 mb-6">
-        <input
-          ref={inputRef}
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && addTask()}
-          placeholder="新しいタスクを入力..."
-          className="todo-input flex-1 px-4 py-3 rounded-xl bg-white border border-[#e8e5e0] text-[#1a1a2e] placeholder-[#bbb] text-sm transition-shadow"
+      <section className="mb-4">
+        <ProgressChart tasks={tasks} />
+      </section>
+
+      <section className="mb-4">
+        <AddTaskForm onAdd={addTask} />
+      </section>
+
+      <section className="mb-4 glass rounded-2xl p-4 shadow-sm">
+        <Filters
+          categoryFilter={categoryFilter}
+          priorityFilter={priorityFilter}
+          onCategoryChange={setCategoryFilter}
+          onPriorityChange={setPriorityFilter}
         />
-        <button
-          onClick={addTask}
-          disabled={!input.trim()}
-          className="px-4 py-3 rounded-xl bg-[#6366f1] text-white text-sm font-medium hover:bg-[#4f52d3] disabled:opacity-40 disabled:cursor-not-allowed transition-all active:scale-95"
-        >
-          追加
-        </button>
-      </div>
+      </section>
 
       <ul className="space-y-2">
-        {tasks.map((task) => (
-          <li
+        {filtered.map((task) => (
+          <TaskItem
             key={task.id}
-            className={`flex items-center gap-3 px-4 py-3 rounded-xl bg-white border transition-all duration-200 ${
-              removingIds.has(task.id)
-                ? "task-exit"
-                : "task-enter border-[#e8e5e0]"
-            }`}
-          >
-            <button
-              onClick={() => toggleTask(task.id)}
-              aria-label={task.done ? "未完了に戻す" : "完了にする"}
-              className={`flex-shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
-                task.done
-                  ? "bg-[#6366f1] border-[#6366f1]"
-                  : "border-[#ccc] hover:border-[#6366f1]"
-              }`}
-            >
-              {task.done && (
-                <svg
-                  className="w-3 h-3 text-white"
-                  viewBox="0 0 12 12"
-                  fill="none"
-                >
-                  <path
-                    d="M2 6l3 3 5-5"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              )}
-            </button>
-
-            <span
-              className={`flex-1 text-sm transition-all ${
-                task.done ? "line-through text-[#bbb]" : "text-[#1a1a2e]"
-              }`}
-            >
-              {task.text}
-            </span>
-
-            <button
-              onClick={() => removeTask(task.id)}
-              aria-label="削除"
-              className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-lg text-[#ccc] hover:text-[#ef4444] hover:bg-[#fef2f2] transition-all"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
-                <path
-                  d="M4 4l8 8M12 4l-8 8"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </button>
-          </li>
+            task={task}
+            removing={removingIds.has(task.id)}
+            justCompleted={justCompletedIds.has(task.id)}
+            onToggle={toggleTask}
+            onRemove={removeTask}
+          />
         ))}
       </ul>
 
-      {tasks.some((t) => t.done) && (
+      {filtered.length === 0 && tasks.length > 0 && filtersActive && (
+        <div className="text-center py-8 text-sm text-[#5b7364]">
+          条件に合うタスクがありません
+        </div>
+      )}
+
+      {hasCompleted && (
         <button
-          onClick={() => setTasks((prev) => prev.filter((t) => !t.done))}
-          className="mt-4 w-full py-2 text-xs text-[#aaa] hover:text-[#ef4444] transition-colors"
+          onClick={clearCompleted}
+          className="mt-4 w-full py-2.5 rounded-xl text-xs text-[#5b7364] hover:text-[#ef4444] hover:bg-white/60 transition-all"
         >
           完了済みをすべて削除
         </button>
